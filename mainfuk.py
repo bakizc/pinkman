@@ -66,7 +66,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 📌 *Join now:* [Click Here]({CHANNEL_LINK})
 """
-
         await update.message.reply_text(welcome_message, parse_mode="Markdown", disable_web_page_preview=True)
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -87,6 +86,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             thumb_id = update.message.video.thumbnail.file_id
 
     if not file_id or not file_type:
+        await update.message.reply_text("❌ No valid media detected!")
         return
 
     try:
@@ -105,50 +105,21 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         encoded_link = encode_payload(f"get-media-{unique_id}")
         link = f"https://t.me/{bot_user.username}?start={encoded_link}"
 
-        caption = f"🔥 Media Link:\n📌 {link}"
+        media_indicator = f"📸 pic {unique_id}" if file_type == "photo" else f"🎥 mms {unique_id}"
+        cooked_message = f"🔥 Cooked meth:\n\n{media_indicator}\n\n🔗 LINK: {link}"
+
+        # Send message to the user
+        sent_message = await update.message.reply_text(cooked_message)
         
-        await update.message.reply_text(caption)
+        # Forward the cooked message to the storage channel
+        await context.bot.forward_message(chat_id=STORAGE_CHANNEL_ID, from_chat_id=update.message.chat_id,
+                                          message_id=sent_message.message_id)
+
+        logging.info(f"✅ Media saved: {file_id}, {unique_id}")
 
     except Exception as e:
         logging.error(f"Error handling media: {e}")
-        await update.message.reply_text("❌ Failed to process media!")
-
-async def send_media(update: Update, context: ContextTypes.DEFAULT_TYPE, unique_id: str) -> None:
-    try:
-        cursor.execute("SELECT file_id, thumb_id, file_type FROM media WHERE unique_id = ?", (unique_id,))
-        result = cursor.fetchone()
-
-        if result:
-            file_id, thumb_id, file_type = result
-
-            warning_message = "⚠️ *This media will be deleted in 15 minutes!*"
-            sent_message = None
-
-            if file_type == "photo":
-                sent_message = await update.message.reply_photo(photo=file_id, caption=warning_message, parse_mode="Markdown")
-            elif file_type == "video":
-                sent_message = await update.message.reply_video(video=file_id, caption=warning_message, parse_mode="Markdown")
-
-            # Schedule deletion asynchronously
-            if sent_message:
-                message_id = sent_message.message_id
-                chat_id = update.message.chat_id
-                asyncio.create_task(delete_message_later(context, chat_id, message_id))
-
-        else:
-            await update.message.reply_text("❌ Invalid or expired link!")
-
-    except Exception as e:
-        logging.error(f"Error sending media: {e}")
-        await update.message.reply_text("❌ An error occurred!")
-
-async def delete_message_later(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
-    """Deletes a message after 15 minutes without blocking the bot."""
-    await asyncio.sleep(900)  # Wait 15 minutes
-    try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except Exception as e:
-        logging.warning(f"Failed to delete message: {e}")
+        await update.message.reply_text(f"❌ Failed to process media! Error: {str(e)}")
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()

@@ -1,16 +1,22 @@
 import sqlite3
 
-# Connect to the database
+# Connect to the existing database
 conn = sqlite3.connect("mediadatabase.db")
 cursor = conn.cursor()
 
-# Add the new column if it doesn't exist
+# Add the missing column if it doesn't exist
 try:
-    cursor.execute("ALTER TABLE media ADD COLUMN thumb_id TEXT;")
+    cursor.execute("ALTER TABLE media ADD COLUMN thumb_id TEXT")
     conn.commit()
-    print("✅ Column 'thumb_id' added successfully!")
-except sqlite3.OperationalError as e:
-    print(f"⚠️ Error: {e}")
+    print("✅ Successfully added 'thumb_id' column!")
+except sqlite3.OperationalError:
+    print("⚠️ Column 'thumb_id' already exists.")
 
-# Close the connection
+# Verify the updated schema
+cursor.execute("PRAGMA table_info(media)")
+columns = cursor.fetchall()
+print("📌 Current Table Schema:")
+for col in columns:
+    print(col)
+
 conn.close()
