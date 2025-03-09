@@ -7,6 +7,7 @@ import asyncio
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from flask import Flask, request
 
 # Load environment variables
 load_dotenv()
@@ -35,6 +36,12 @@ conn.commit()
 # Logging
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
+# Webhook Flask App
+app = Flask(__name__)
+
+# Telegram Bot Application
+telegram_app = Application.builder().token(BOT_TOKEN).build()
+
 def encode_payload(payload: str) -> str:
     return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
 
@@ -43,6 +50,22 @@ def decode_payload(encoded: str) -> str:
     if padding:
         encoded += "=" * (4 - padding)
     return base64.urlsafe_b64decode(encoded).decode()
+
+async def send_media(update: Update, context: ContextTypes.DEFAULT_TYPE, unique_id: str):
+    cursor.execute("SELECT file_id, thumb_id, file_type FROM media WHERE unique_id = ?", (unique_id,))
+    media_entry = cursor.fetchone()
+
+    if media_entry:
+        file_id, thumb_id, file_type = media_entry
+
+        if file_type == "photo":
+            await update.message.reply_photo(photo=file_id)
+        elif file_type == "video":
+            await update.message.reply_video(video=file_id, thumb=thumb_id)
+
+        logging.info(f"✅ Sent media: {unique_id}")
+    else:
+        await update.message.reply_text("❌ Media not found!")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message_text = update.message.text.strip()
@@ -121,13 +144,24 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logging.error(f"Error handling media: {e}")
         await update.message.reply_text(f"❌ Failed to process media! Error: {str(e)}")
 
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, handle_media))
+# Webhook Setup
+WEBHOOK_URL = f"https://your-google-cloud-url.com/{BOT_TOKEN}"
 
-    logging.info("✅ Bot is running...")
-    app.run_polling()
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(), telegram_app.bot)
+    telegram_app.process_update(update)
+    return "OK", 200
 
+async def set_webhook():
+    await telegram_app.bot.set_webhook(WEBHOOK_URL)
+
+# Start Flask Server & Set Webhook
 if __name__ == "__main__":
-    main()
+    telegram_app.add_handler(CommandHandler("start", start))
+    telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, handle_media))
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(set_webhook())
+    
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
