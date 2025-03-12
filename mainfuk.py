@@ -12,9 +12,11 @@ from flask import Flask, request
 # Load environment variables
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID"))  # Only the owner can upload media
+OWNER_ID = int(os.getenv("OWNER_ID"))
 CHANNEL_LINK = os.getenv("CHANNEL_LINK")
-STORAGE_CHANNEL_ID = int(os.getenv("STORAGE_CHANNEL_ID"))  # Private storage channel
+STORAGE_CHANNEL_ID = int(os.getenv("STORAGE_CHANNEL_ID"))
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+PORT = int(os.environ.get("PORT", 8080))
 
 # Initialize database
 conn = sqlite3.connect("mediadatabase.db", check_same_thread=False)
@@ -34,7 +36,7 @@ cursor.execute("""
 conn.commit()
 
 # Logging
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(filename="bot.log", format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 # Webhook Flask App
 app = Flask(__name__)
@@ -57,19 +59,18 @@ async def send_media(update: Update, context: ContextTypes.DEFAULT_TYPE, unique_
 
     if media_entry:
         file_id, thumb_id, file_type = media_entry
-
+        
         if file_type == "photo":
             await update.message.reply_photo(photo=file_id)
         elif file_type == "video":
             await update.message.reply_video(video=file_id, thumb=thumb_id)
-
+        
         logging.info(f"✅ Sent media: {unique_id}")
     else:
         await update.message.reply_text("❌ Media not found!")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message_text = update.message.text.strip()
-
     if message_text.startswith("/start ") and len(message_text) > 7:
         encoded_payload = message_text.split(" ", 1)[1]
         try:
@@ -82,23 +83,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text("❌ Invalid link format!")
     else:
         welcome_message = f"""🚀 *Welcome to the Bot!*
-
-⚠️ *WARNING: 18+ Content*
-
-🔞 This bot provides *exclusive content for adults only*. By continuing, you confirm that you are *18 or older*.
-
-📌 *Join now:* [Click Here]({CHANNEL_LINK})
-"""
+        \n⚠️ *WARNING: 18+ Content*\n\n🔞 This bot provides *exclusive content for adults only*.\n\n📌 *Join now:* [Click Here]({CHANNEL_LINK})"""
         await update.message.reply_text(welcome_message, parse_mode="Markdown", disable_web_page_preview=True)
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message.from_user.id != OWNER_ID:
-        return  # Ignore media uploads from other users
+        return
 
-    file_id = None
-    thumb_id = None
-    file_type = None
-
+    file_id, thumb_id, file_type = None, None, None
+    
     if update.message.photo:
         file_id = update.message.photo[-1].file_id
         file_type = "photo"
@@ -107,45 +100,35 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         file_type = "video"
         if update.message.video.thumbnail:
             thumb_id = update.message.video.thumbnail.file_id
-
+    
     if not file_id or not file_type:
         await update.message.reply_text("❌ No valid media detected!")
         return
-
+    
     try:
         cursor.execute("SELECT unique_id FROM media WHERE file_id = ?", (file_id,))
         existing_entry = cursor.fetchone()
         unique_id = existing_entry[0] if existing_entry else str(uuid.uuid4())[:8]
-
+        
         if not existing_entry:
             with conn:
                 cursor.execute("INSERT INTO media (file_id, thumb_id, file_type, unique_id) VALUES (?, ?, ?, ?)",
                                (file_id, thumb_id, file_type, unique_id))
             await context.bot.forward_message(chat_id=STORAGE_CHANNEL_ID, from_chat_id=update.message.chat_id,
                                               message_id=update.message.message_id)
-
+        
         bot_user = await context.bot.get_me()
         encoded_link = encode_payload(f"get-media-{unique_id}")
         link = f"https://t.me/{bot_user.username}?start={encoded_link}"
-
-        media_indicator = f"📸 pic {unique_id}" if file_type == "photo" else f"🎥 mms {unique_id}"
-        cooked_message = f"🔥 Cooked meth:\n\n{media_indicator}\n\n🔗 LINK: {link}"
-
-        # Send message to the user
-        sent_message = await update.message.reply_text(cooked_message)
         
-        # Forward the cooked message to the storage channel
+        cooked_message = f"🔥 Cooked meth:\n\n📸 pic {unique_id if file_type == 'photo' else '🎥 mms ' + unique_id}\n\n🔗 LINK: {link}"
+        sent_message = await update.message.reply_text(cooked_message)
         await context.bot.forward_message(chat_id=STORAGE_CHANNEL_ID, from_chat_id=update.message.chat_id,
                                           message_id=sent_message.message_id)
-
         logging.info(f"✅ Media saved: {file_id}, {unique_id}")
-
     except Exception as e:
         logging.error(f"Error handling media: {e}")
         await update.message.reply_text(f"❌ Failed to process media! Error: {str(e)}")
-
-# Webhook Setup
-WEBHOOK_URL = f"https://your-google-cloud-url.com/{BOT_TOKEN}"
 
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
@@ -156,12 +139,11 @@ def webhook():
 async def set_webhook():
     await telegram_app.bot.set_webhook(WEBHOOK_URL)
 
-# Start Flask Server & Set Webhook
 if __name__ == "__main__":
     telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, handle_media))
-
+    
     loop = asyncio.get_event_loop()
     loop.run_until_complete(set_webhook())
     
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    app.run(host="0.0.0.0", port=PORT)
